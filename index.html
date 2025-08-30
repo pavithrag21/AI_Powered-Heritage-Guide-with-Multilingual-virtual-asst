@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Heritage Map website</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css"/>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+    }
+    #map {
+      width: 100%;
+      transition: width 0.5s ease;
+      position: relative;
+    }
+    #right-panel {
+      width: 0;
+      overflow: hidden;
+      background-color: #f9f9f9;
+      transition: width 0.5s ease;
+      box-shadow: -2px 0 10px rgba(0,0,0,0.2);
+      display: flex;
+      flex-direction: column;
+      padding: 15px;
+    }
+    #right-panel.show { width: 35%; }
+    #info-card {
+      flex: 1;
+      display: none;
+      opacity: 0;
+      transform: translateY(30px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+      overflow-y: auto;
+      max-height: 100%;
+    }
+    #info-card.visible {
+      opacity: 1;
+      transform: translateY(0);
+      display: block;
+    }
+    #info-card img {
+      width: 100%;
+      border-radius: 8px;
+      height: auto;
+      margin-bottom: 10px;
+    }
+    #chat-button {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 9999;
+      padding: 12px 16px;
+      background-color: #333;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+      transition: background-color 0.3s;
+    }
+    #chat-button:hover { background-color: #555; }
+    #chatbot-container {
+      display: none;
+      flex: 1;
+      height: 100%;
+      opacity: 0;
+      transform: translateY(30px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    #chatbot-container.visible {
+      display: block;
+      opacity: 1;
+      transform: translateY(0);
+    }
+    #chatbot-container iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: white;
+      padding: 8px;
+      border-radius: 5px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    }
+    ul.significance-points {
+      margin-top: 10px;
+      padding-left: 20px;
+    }
+    ul.significance-points li {
+      margin-bottom: 6px;
+    }
+    #place-desc {
+      margin-bottom: 10px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div id="map">
+    <div id="controls">
+      <button onclick="getLiveLocation()">📍 Get My Location</button>
+      <button onclick="showNearbyPlaces()">🔍 Show Nearby Places</button>
+    </div>
+    <button id="chat-button" onclick="toggleChat()">💬 Chatbot</button>
+  </div>
+  <div id="right-panel">
+    <div id="info-card">
+      <img id="place-img" src="" alt="Heritage Image" />
+      <h2 id="place-name">Heritage Name</h2>
+      <p id="place-desc">Description will appear here.</p>
+      <ul id="significance-list" class="significance-points"></ul>
+      <div id="route-container"></div>
+    </div>
+    <div id="chatbot-container">
+      <iframe id="chatbot-iframe" src="http://127.0.0.1:7860" title="Chatbot"></iframe>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
+
+  <script>
+    let map = L.map('map').setView([11.0, 78.0], 7);
+    let heritageData = [];
+    let userLocation = null;
+    let routingControl = null;
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    fetch('Updates_Temples_List.csv')
+      .then(res => res.text())
+      .then(data => {
+        Papa.parse(data, {
+          header: true,
+          skipEmptyLines: true,
+          complete: results => {
+            heritageData = results.data;
+          }
+        });
+      });
+
+    function getLiveLocation() {
+      navigator.geolocation.getCurrentPosition(pos => {
+        userLocation = L.latLng(pos.coords.latitude, pos.coords.longitude);
+        L.marker(userLocation).addTo(map).bindPopup("📍 You are here").openPopup();
+        map.setView(userLocation, 10);
+      }, err => {
+        alert("Location access denied.");
+      });
+    }
+
+    function showRouteTo(lat, lng) {
+      if (!userLocation) {
+        alert("Please get your live location first.");
+        return;
+      }
+      if (routingControl) map.removeControl(routingControl);
+      routingControl = L.Routing.control({
+        waypoints: [userLocation, L.latLng(lat, lng)],
+        routeWhileDragging: false,
+        show: true,
+        addWaypoints: false,
+        draggableWaypoints: false,
+        createMarker: function(i, wp, nWps) {
+          return L.marker(wp.latLng);
+        }
+      }).addTo(map);
+    }
+
+    function haversineDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const toRad = deg => deg * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat/2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2) ** 2;
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    function showNearbyPlaces() {
+      if (!userLocation) return;
+      heritageData.forEach(place => {
+        const lat = parseFloat(place.latitude);
+        const lng = parseFloat(place.longitude);
+        if (isNaN(lat) || isNaN(lng)) return;
+        const dist = haversineDistance(userLocation.lat, userLocation.lng, lat, lng);
+        if (dist <= 500) {
+          const marker = L.marker([lat, lng], {
+            icon: new L.Icon({
+              iconUrl: 'https://maps.google.com/mapfiles/ms/icons/red-dot.png',
+              iconSize: [32, 32],
+              iconAnchor: [16, 32],
+              popupAnchor: [0, -32]
+            })
+          }).addTo(map);
+          marker.on('click', () => {
+            document.getElementById('map').style.width = "65%";
+            document.getElementById('right-panel').classList.add("show");
+            const card = document.getElementById('info-card');
+            const chatbot = document.getElementById('chatbot-container');
+            card.classList.add("visible");
+            card.style.display = "block";
+            chatbot.classList.remove("visible");
+            chatbot.style.display = "none";
+            document.getElementById('place-img').src = `images/${place.image_url}`;
+            console.log(`images/${place.image_url}`);
+
+            document.getElementById('place-name').textContent = place.name || 'Unknown Place';
+            document.getElementById('place-desc').textContent = place.description || 'No description available.';
+            const significanceList = document.getElementById('significance-list');
+            significanceList.innerHTML = '';
+            if (place.significance) {
+              const points = place.significance.split(/\n|\r|•|\-/).map(pt => pt.trim()).filter(pt => pt);
+              points.forEach(pt => {
+                const li = document.createElement('li');
+                li.textContent = pt;
+                significanceList.appendChild(li);
+              });
+            }
+            const directionsBtn = document.createElement('button');
+            directionsBtn.textContent = 'Show Route';
+            directionsBtn.onclick = () => showRouteTo(lat, lng);
+            significanceList.appendChild(directionsBtn);
+          });
+        }
+      });
+    }
+
+    function toggleChat() {
+      const card = document.getElementById('info-card');
+      const chatbot = document.getElementById('chatbot-container');
+      const panel = document.getElementById('right-panel');
+      document.getElementById('map').style.width = "65%";
+      panel.classList.add("show");
+      if (chatbot.classList.contains("visible")) {
+        chatbot.classList.remove("visible");
+        setTimeout(() => chatbot.style.display = "none", 300);
+      } else {
+        chatbot.classList.add("visible");
+        chatbot.style.display = "block";
+        card.classList.remove("visible");
+        card.style.display = "none";
+      }
+    }
+  </script>
+</body>
+</html>
